@@ -35,12 +35,12 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   frame capture [-d display] [out.png]   capture a display to a PNG ("-" for stdout)
-  frame select [-points] [image.png]     print "x y w h" of an area picked on screen
+  frame select [-points] [image.png]     pick an area, print "x y w h"
   frame displays                         list displays
   frame version                          show build info
 
-frame select reads a PNG on stdin when given "-" or no argument, so it
-pairs with "frame capture - | frame select". Coordinates are in the pixels
-of that image; on a Retina display that is twice the points shown while
-dragging, which -points reports instead.`)
+frame select captures the screen itself unless given an image -- either a
+file, or a PNG piped in ("frame capture - | frame select"). Coordinates are
+in the pixels of that image; on a Retina display that is twice the points
+shown while dragging, which -points reports instead.`)
 }
