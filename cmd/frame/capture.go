@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"image/png"
+	"io"
 	"os"
 	"time"
 
@@ -29,14 +30,21 @@ func runCapture(args []string) error {
 		return err
 	}
 
-	f, err := os.Create(out)
-	if err != nil {
+	// "-" streams the PNG on stdout so it can pipe into select; the summary
+	// moves to stderr there to keep that stream decodable.
+	var w io.Writer = os.Stdout
+	summary := os.Stderr
+	if out != "-" {
+		f, err := os.Create(out)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		w, summary = f, os.Stdout
+	}
+	if err := png.Encode(w, img); err != nil {
 		return err
 	}
-	defer f.Close()
-	if err := png.Encode(f, img); err != nil {
-		return err
-	}
-	fmt.Printf("%s (%dx%d)\n", out, img.Bounds().Dx(), img.Bounds().Dy())
+	fmt.Fprintf(summary, "%s (%dx%d)\n", out, img.Bounds().Dx(), img.Bounds().Dy())
 	return nil
 }

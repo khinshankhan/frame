@@ -32,7 +32,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  frame capture [-d display] [out.png]   capture a display to a PNG
+  frame capture [-d display] [out.png]   capture a display to a PNG ("-" for stdout)
   frame displays                         list displays
   frame version                          show build info`)
 }
