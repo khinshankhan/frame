@@ -22,40 +22,71 @@ func Select(img *image.RGBA) (image.Rectangle, bool, error) {
 		return image.Rectangle{}, false, fmt.Errorf("screen recording access denied (%s)", macperm.Hint)
 	}
 
-	f, err := os.CreateTemp("", "frame-selection-*.png")
+	// Access is already confirmed, so an empty result is the user escaping
+	// out. Declining to select is not an error.
+	crop, ok, err := screencapture("-i", "-s", "-x")
 	if err != nil {
 		return image.Rectangle{}, false, err
+	}
+	if !ok {
+		return image.Rectangle{}, false, nil
+	}
+
+	// screencapture -i grabs the live framebuffer at the moment the drag
+	// ends, so match against a frame taken right after rather than img,
+	// which the caller may have taken minutes ago. Anything that moved
+	// since -- terminal output, the menu bar clock, a blinking cursor --
+	// defeats an exact match. Re-grabbing narrows that window to the gap
+	// between releasing the mouse and the capture below.
+	if screen, ok, err := screencapture("-x", "-D", "1"); err == nil && ok {
+		if r, found := findSubimage(screen, crop); found {
+			return r, true, nil
+		}
+	}
+
+	// img still answers when the screen genuinely held still, and is all
+	// that is left if the re-grab failed or the selection came from a
+	// display other than the main one.
+	if r, found := findSubimage(img, crop); found {
+		return r, true, nil
+	}
+	return image.Rectangle{}, false, fmt.Errorf("selected area not found on screen -- it likely changed between the capture and the selection")
+}
+
+// screencapture runs the tool with args plus a temp destination and decodes
+// what it wrote. Reports false without an error when nothing was written,
+// which is how an interactive grab signals cancellation.
+func screencapture(args ...string) (*image.RGBA, bool, error) {
+	f, err := os.CreateTemp("", "frame-selection-*.png")
+	if err != nil {
+		return nil, false, err
 	}
 	path := f.Name()
 	if err := f.Close(); err != nil {
-		return image.Rectangle{}, false, err
+		return nil, false, err
 	}
+	// Remove it so a leftover empty file is never mistaken for a capture.
 	if err := os.Remove(path); err != nil {
-		return image.Rectangle{}, false, err
+		return nil, false, err
 	}
 	defer os.Remove(path)
 
-	cmd := exec.Command("screencapture", "-i", "-s", "-x", path)
+	cmd := exec.Command("screencapture", append(append([]string{}, args...), path)...)
 	if err := cmd.Run(); err != nil && !fileExists(path) {
-		return image.Rectangle{}, false, nil
+		return nil, false, nil
 	}
 
-	crop, err := loadPNG(path)
+	img, err := loadPNG(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return image.Rectangle{}, false, nil
+			return nil, false, nil
 		}
-		return image.Rectangle{}, false, err
+		return nil, false, err
 	}
-	if crop.Rect.Empty() {
-		return image.Rectangle{}, false, nil
+	if img.Rect.Empty() {
+		return nil, false, nil
 	}
-
-	r, ok := findSubimage(img, crop)
-	if !ok {
-		return image.Rectangle{}, false, fmt.Errorf("selected area not found in source image")
-	}
-	return r, true, nil
+	return img, true, nil
 }
 
 func fileExists(path string) bool {
@@ -75,38 +106,4 @@ func loadPNG(path string) (*image.RGBA, error) {
 		return nil, err
 	}
 	return rgbaOf(src), nil
-}
-
-func findSubimage(img, needle *image.RGBA) (image.Rectangle, bool) {
-	bounds := img.Bounds()
-	nb := needle.Bounds()
-	if nb.Dx() > bounds.Dx() || nb.Dy() > bounds.Dy() {
-		return image.Rectangle{}, false
-	}
-
-	for y := bounds.Min.Y; y <= bounds.Max.Y-nb.Dy(); y++ {
-		for x := bounds.Min.X; x <= bounds.Max.X-nb.Dx(); x++ {
-			p := image.Pt(x, y)
-			if subimageAt(img, needle, p) {
-				return image.Rectangle{Min: p, Max: p.Add(nb.Size())}, true
-			}
-		}
-	}
-	return image.Rectangle{}, false
-}
-
-func subimageAt(img, needle *image.RGBA, at image.Point) bool {
-	nb := needle.Bounds()
-	for y := 0; y < nb.Dy(); y++ {
-		imgRow := img.Pix[(at.Y+y-img.Rect.Min.Y)*img.Stride:]
-		needleRow := needle.Pix[(nb.Min.Y+y-needle.Rect.Min.Y)*needle.Stride:]
-		for x := 0; x < nb.Dx(); x++ {
-			i := (at.X + x - img.Rect.Min.X) * 4
-			j := (nb.Min.X + x - needle.Rect.Min.X) * 4
-			if imgRow[i] != needleRow[j] || imgRow[i+1] != needleRow[j+1] || imgRow[i+2] != needleRow[j+2] {
-				return false
-			}
-		}
-	}
-	return true
 }
