@@ -44,13 +44,13 @@ services:
 test:
 	go test ./...
 
-# prove every service builds cgo-free for every shipping GOOS
-.PHONY: cross
-cross:
-	for goos in linux windows darwin; do
-		arch=amd64; [[ $$goos == darwin ]] && arch=arm64
-		for svc in $(GOSERVICES); do
-			GOOS=$$goos GOARCH=$$arch go build -o /dev/null ./cmd/$$svc
-		done
-	done
-	echo "all services build cgo-free"
+# platforms `cross` proves the build on. Each is a target of its own too, so
+# `make darwin/arm64` checks just that one.
+GOCROSSPLATFORMS = linux/amd64 windows/amd64 darwin/arm64
+
+# prove every service builds cgo-free for every shipping platform.
+.PHONY: cross $(GOCROSSPLATFORMS)
+cross: $(GOCROSSPLATFORMS)
+
+$(GOCROSSPLATFORMS):
+	GOOS=$(@D) GOARCH=$(@F) go build -o /dev/null ./cmd/...
