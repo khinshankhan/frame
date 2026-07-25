@@ -16,5 +16,5 @@ type Capturer interface {
 
 // New returns the best available Capturer for this machine.
 func New() (Capturer, error) {
-	return genericCapturer{}, nil
+	return newCapturer()
 }

@@ -1,3 +1,5 @@
+//go:build !darwin
+
 package capture
 
 import (
@@ -9,9 +11,12 @@ import (
 
 // genericCapturer wraps kbinani/screenshot: XGetImage on X11 (with a
 // portal/dbus path on Wayland, unverified by us), GDI on Windows. Pure Go
-// on those platforms. Its darwin backend is cgo-only, which frame doesn't
-// use -- macOS needs a no-cgo backend (screencapture CLI, later purego).
+// on those platforms; darwin gets its own cgo-free backend in darwin.go.
 type genericCapturer struct{}
+
+func newCapturer() (Capturer, error) {
+	return genericCapturer{}, nil
+}
 
 func (genericCapturer) Displays() ([]image.Rectangle, error) {
 	bounds := make([]image.Rectangle, screenshot.NumActiveDisplays())

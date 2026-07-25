@@ -8,9 +8,20 @@ import (
 	"image/png"
 	"os"
 	"os/exec"
+
+	"github.com/khinshankhan/frame/macperm"
 )
 
 func Select(img *image.RGBA) (image.Rectangle, bool, error) {
+	// Check access before the crosshair appears. macOS draws the selection
+	// overlay without Screen Recording access and only enforces it when
+	// screencapture reads the framebuffer, so leaving this until afterwards
+	// makes the user drag out a region before learning it can't be taken.
+	if macperm.Denied() {
+		macperm.OpenSettings()
+		return image.Rectangle{}, false, fmt.Errorf("screen recording access denied (%s)", macperm.Hint)
+	}
+
 	f, err := os.CreateTemp("", "frame-selection-*.png")
 	if err != nil {
 		return image.Rectangle{}, false, err
