@@ -1,1 +1,4 @@
 /bin/
+
+# Default output of `frame capture` with no filename argument.
+frame-*.png
