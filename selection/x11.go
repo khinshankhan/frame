@@ -12,6 +12,10 @@ import (
 
 const escapeKeysym xproto.Keysym = 0xff1b
 
+// Scale reports pixels of img per display point. X11 addresses the screen
+// in pixels already, so its rectangles need no conversion.
+func Scale(*image.RGBA) float64 { return 1 }
+
 func Select(img *image.RGBA) (image.Rectangle, bool, error) {
 	conn, err := xgb.NewConn()
 	if err != nil {

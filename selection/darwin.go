@@ -3,14 +3,64 @@
 package selection
 
 import (
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/png"
+	"math"
 	"os"
 	"os/exec"
 
 	"github.com/khinshankhan/frame/macperm"
 )
+
+// screenScaleScript reports each screen's point size and backing scale.
+const screenScaleScript = `
+ObjC.import("AppKit");
+var out = [];
+var screens = $.NSScreen.screens;
+for (var i = 0; i < screens.count; i++) {
+  var s = screens.objectAtIndex(i);
+  out.push({W:s.frame.size.width, H:s.frame.size.height, Scale:s.backingScaleFactor});
+}
+JSON.stringify(out);
+`
+
+// Scale reports how many pixels of img make up one display point, for
+// converting Select's rectangles into the point space macOS shows on
+// screen. The factor is per-display -- 1 on a non-Retina monitor, 2 on
+// Retina, and potentially both at once on a mixed setup -- so it is matched
+// against whichever screen img was captured from rather than assumed from
+// the main one. Falls back to 1, which is right whenever no scaling is in
+// play and merely leaves coordinates in pixels when it is not.
+func Scale(img *image.RGBA) float64 {
+	out, err := exec.Command("osascript", "-l", "JavaScript", "-e", screenScaleScript).Output()
+	if err != nil {
+		return 1
+	}
+	var screens []struct{ W, H, Scale float64 }
+	if err := json.Unmarshal(out, &screens); err != nil {
+		return 1
+	}
+
+	w, h := float64(img.Bounds().Dx()), float64(img.Bounds().Dy())
+	for _, s := range screens {
+		if s.Scale > 0 && math.Round(s.W*s.Scale) == w && math.Round(s.H*s.Scale) == h {
+			return s.Scale
+		}
+	}
+	// img is not a whole screen (a pre-cropped frame, say), so there is
+	// nothing to match it against. The main display is the best guess left,
+	// but say so: on a mixed-DPI setup it is the wrong display's factor, and
+	// silently reporting points that are off by 2x is worse than a warning.
+	if len(screens) > 0 && screens[0].Scale > 0 {
+		fmt.Fprintf(os.Stderr,
+			"select: %dx%d matches no display; assuming the main display's %gx scale\n",
+			img.Bounds().Dx(), img.Bounds().Dy(), screens[0].Scale)
+		return screens[0].Scale
+	}
+	return 1
+}
 
 func Select(img *image.RGBA) (image.Rectangle, bool, error) {
 	// Check access before the crosshair appears. macOS draws the selection
@@ -41,6 +91,15 @@ func Select(img *image.RGBA) (image.Rectangle, bool, error) {
 	if screen, ok, err := screencapture("-x", "-D", "1"); err == nil && ok {
 		if r, found := findSubimage(screen, crop); found {
 			return r, true, nil
+		}
+		// A re-grab of a different size means the display was resized or
+		// rearranged since the caller captured img, so img describes a
+		// screen that no longer exists. Searching it could only produce a
+		// rectangle in stale coordinates.
+		if screen.Bounds().Size() != img.Bounds().Size() {
+			return image.Rectangle{}, false, fmt.Errorf(
+				"display changed size since the capture (%v then, %v now) -- capture again",
+				img.Bounds().Size(), screen.Bounds().Size())
 		}
 	}
 
