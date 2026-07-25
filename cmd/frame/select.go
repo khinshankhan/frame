@@ -14,34 +14,30 @@ import (
 	"github.com/khinshankhan/frame/selection"
 )
 
-func main() {
+func runSelect(args []string) error {
 	fs := flag.NewFlagSet("select", flag.ExitOnError)
 	points := fs.Bool("points", false, "report display points rather than image pixels")
-	fs.Usage = usage
-	fs.Parse(os.Args[1:])
+	fs.Parse(args)
 
-	// Default to stdin so `frame capture - | select` works with no args,
-	// but print usage rather than blocking on a terminal nobody is piping.
+	// Default to stdin so `frame capture - | frame select` needs no
+	// argument, but say so rather than blocking when stdin is a terminal.
 	path := "-"
 	if fs.NArg() > 0 {
 		path = fs.Arg(0)
 	} else if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
-		usage()
-		os.Exit(2)
+		return fmt.Errorf(`select needs a PNG: pass a file, or pipe one in with "frame capture - | frame select"`)
 	}
 
 	img, err := loadRGBA(path)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "select:", err)
-		os.Exit(1)
+		return err
 	}
 	r, ok, err := selection.Select(img)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "select:", err)
-		os.Exit(1)
+		return err
 	}
 	if !ok {
-		return
+		return nil // cancelled; declining to select is not an error
 	}
 
 	x, y, w, h := r.Min.X, r.Min.Y, r.Dx(), r.Dy()
@@ -54,20 +50,11 @@ func main() {
 		}
 	}
 	fmt.Printf("%d %d %d %d\n", x, y, w, h)
+	return nil
 }
 
 func scale(v int, by float64) int {
 	return int(math.Round(float64(v) / by))
-}
-
-func usage() {
-	fmt.Fprintln(os.Stderr, `usage: select [-points] [image.png]
-
-Reads a PNG on stdin when given "-" or no argument, so it pairs with
-"frame capture - | select". Prints "x y width height" of the selected
-area, in the pixels of that image -- on a Retina display that is twice
-the points shown on screen while dragging. Pass -points for those.
-Prints nothing if the selection is cancelled.`)
 }
 
 func loadRGBA(path string) (*image.RGBA, error) {
@@ -80,8 +67,8 @@ func loadRGBA(path string) (*image.RGBA, error) {
 		defer f.Close()
 		in = f
 	}
-	// Name an empty stream for what it is; a capture that failed upstream
-	// would otherwise surface here as a puzzling "unknown format".
+	// Tell an empty stream apart from a malformed one: a failed upstream
+	// capture would otherwise read as "unknown format".
 	br := bufio.NewReader(in)
 	if _, err := br.Peek(1); err == io.EOF {
 		return nil, fmt.Errorf("no image data on input (did the capture upstream fail?)")
