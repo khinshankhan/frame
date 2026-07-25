@@ -1,21 +1,29 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"image"
 	"image/draw"
 	_ "image/png"
+	"io"
 	"os"
 
 	"github.com/khinshankhan/frame/selection"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: select <image.png>")
+	// Default to stdin so `frame capture - | select` needs no argument, but
+	// bail with usage rather than blocking when stdin is a terminal.
+	path := "-"
+	if len(os.Args) > 1 {
+		path = os.Args[1]
+	} else if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+		fmt.Fprintln(os.Stderr, `usage: select [image.png]   reads a PNG on stdin when given "-" or no argument`)
 		os.Exit(2)
 	}
-	r, ok, err := selectRect(os.Args[1])
+
+	r, ok, err := selectRect(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "select:", err)
 		os.Exit(1)
@@ -34,12 +42,22 @@ func selectRect(path string) (image.Rectangle, bool, error) {
 }
 
 func loadRGBA(path string) (*image.RGBA, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
+	var in io.Reader = os.Stdin
+	if path != "-" {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		in = f
 	}
-	defer f.Close()
-	src, _, err := image.Decode(f)
+	// Tell an empty stream apart from a malformed one: a failed upstream
+	// capture would otherwise read as "unknown format".
+	br := bufio.NewReader(in)
+	if _, err := br.Peek(1); err == io.EOF {
+		return nil, fmt.Errorf("no image data on input (did the capture upstream fail?)")
+	}
+	src, _, err := image.Decode(br)
 	if err != nil {
 		return nil, err
 	}
