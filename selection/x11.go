@@ -92,14 +92,26 @@ func Select(img *image.RGBA) (image.Rectangle, bool, error) {
 				return image.Rectangle{}, false, nil
 			}
 		case xproto.ButtonPressEvent:
-			drag.press(pointOf(e.EventX, e.EventY))
+			// Only the primary button drags; the wheel reports as buttons
+			// 4 and 5 and would otherwise end the selection on a scroll.
+			if e.Detail == xproto.ButtonIndex1 {
+				drag.press(pointOf(e.EventX, e.EventY))
+			}
 		case xproto.MotionNotifyEvent:
 			if r, ok := drag.move(pointOf(e.EventX, e.EventY)); ok {
 				paint(&r)
 			}
 		case xproto.ButtonReleaseEvent:
-			r, ok := drag.release(pointOf(e.EventX, e.EventY))
-			return r, ok, nil
+			// A release with no drag behind it -- the tail of the click that
+			// launched us, or a click that never moved -- is not a choice.
+			// Keep waiting; Escape is how to back out.
+			if e.Detail != xproto.ButtonIndex1 {
+				continue
+			}
+			if r, ok := drag.release(pointOf(e.EventX, e.EventY)); ok {
+				return r, true, nil
+			}
+			paint(nil)
 		}
 	}
 }

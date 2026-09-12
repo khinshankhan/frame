@@ -19,12 +19,16 @@ func (d *dragger) move(p image.Point) (image.Rectangle, bool) {
 	return rectOf(d.start, p), true
 }
 
+// release ends the drag. A click that never moved encloses nothing, so it
+// reports false like a release with no press before it: neither is a
+// selection, and the caller should keep waiting for one.
 func (d *dragger) release(p image.Point) (image.Rectangle, bool) {
 	if !d.dragging {
 		return image.Rectangle{}, false
 	}
 	d.dragging = false
-	return rectOf(d.start, p), true
+	r := rectOf(d.start, p)
+	return r, !r.Empty()
 }
 
 func rectOf(a, b image.Point) image.Rectangle {
