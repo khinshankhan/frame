@@ -75,7 +75,7 @@ func Select(img *image.RGBA) (image.Rectangle, bool, error) {
 		}
 	}
 
-	var drag dragger
+	drag := dragger{bounds: img.Rect}
 	for {
 		ev, xerr := conn.WaitForEvent()
 		if xerr != nil {
