@@ -3,8 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"image"
 	"image/png"
-	"io"
 	"os"
 	"time"
 
@@ -32,19 +32,34 @@ func runCapture(args []string) error {
 
 	// "-" streams the PNG on stdout so it can pipe into select; the summary
 	// moves to stderr there to keep that stream decodable.
-	var w io.Writer = os.Stdout
-	summary := os.Stderr
-	if out != "-" {
-		f, err := os.Create(out)
-		if err != nil {
+	summary := os.Stdout
+	if out == "-" {
+		if err := png.Encode(os.Stdout, img); err != nil {
 			return err
 		}
-		defer f.Close()
-		w, summary = f, os.Stdout
-	}
-	if err := png.Encode(w, img); err != nil {
+		summary = os.Stderr
+	} else if err := writePNG(out, img); err != nil {
 		return err
 	}
 	fmt.Fprintf(summary, "%s (%dx%d)\n", out, img.Bounds().Dx(), img.Bounds().Dy())
 	return nil
+}
+
+// writePNG writes img to path, removing the file again if it cannot be
+// written in full so a failed capture never leaves a truncated PNG behind.
+func writePNG(path string, img image.Image) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	err = png.Encode(f, img)
+	// Close can report the write failure (a full disk, NFS) that Encode
+	// did not, so it decides success as much as Encode does.
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(path)
+	}
+	return err
 }
