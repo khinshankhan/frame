@@ -20,18 +20,7 @@ func runSelect(args []string) error {
 	points := fs.Bool("points", false, "report display points rather than image pixels")
 	fs.Parse(args)
 
-	// Take an explicitly named file if given, otherwise whatever is piped
-	// in. With neither there is nothing to read, so capture the screen.
-	var img *image.RGBA
-	var err error
-	switch {
-	case fs.NArg() > 0:
-		img, err = loadRGBA(fs.Arg(0))
-	case stdinIsPiped():
-		img, err = loadRGBA("-")
-	default:
-		img, err = captureScreen()
-	}
+	img, err := inputImage(fs)
 	if err != nil {
 		return err
 	}
@@ -54,6 +43,19 @@ func runSelect(args []string) error {
 	}
 	fmt.Printf("%d %d %d %d\n", x, y, w, h)
 	return nil
+}
+
+// inputImage takes an explicitly named file if given, otherwise whatever is
+// piped in. With neither there is nothing to read, so it captures the screen.
+func inputImage(fs *flag.FlagSet) (*image.RGBA, error) {
+	switch {
+	case fs.NArg() > 0:
+		return loadRGBA(fs.Arg(0))
+	case stdinIsPiped():
+		return loadRGBA("-")
+	default:
+		return captureScreen()
+	}
 }
 
 func scale(v int, by float64) int {
