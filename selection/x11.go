@@ -45,34 +45,70 @@ func Select(img *image.RGBA) (image.Rectangle, bool, error) {
 	xproto.CreateWindow(conn, screen.RootDepth, wid, screen.Root,
 		0, 0, uint16(width), uint16(height), 0,
 		xproto.WindowClassInputOutput, screen.RootVisual, mask, values)
-	xproto.MapWindow(conn, wid)
 
 	gc, err := xproto.NewGcontextId(conn)
 	if err != nil {
 		return image.Rectangle{}, false, err
 	}
-	xproto.CreateGC(conn, gc, xproto.Drawable(wid), 0, nil)
+	xproto.CreateGC(conn, gc, xproto.Drawable(wid),
+		xproto.GcForeground|xproto.GcGraphicsExposures, []uint32{screen.BlackPixel, 0})
 
-	pix, err := xproto.NewPixmapId(conn)
+	newPixmap := func() (xproto.Drawable, error) {
+		pix, err := xproto.NewPixmapId(conn)
+		if err != nil {
+			return 0, err
+		}
+		xproto.CreatePixmap(conn, screen.RootDepth, pix, xproto.Drawable(wid), uint16(width), uint16(height))
+		return xproto.Drawable(pix), nil
+	}
+	bright, err := newPixmap()
 	if err != nil {
 		return image.Rectangle{}, false, err
 	}
-	xproto.CreatePixmap(conn, screen.RootDepth, pix, xproto.Drawable(wid), uint16(width), uint16(height))
-	putImage(conn, xproto.Drawable(pix), gc, img, width, height, int(setup.MaximumRequestLength))
+	dim, err := newPixmap()
+	if err != nil {
+		return image.Rectangle{}, false, err
+	}
+	// Each frame is composed here and copied to the window whole, so the
+	// screen never shows a frame half drawn.
+	back, err := newPixmap()
+	if err != nil {
+		return image.Rectangle{}, false, err
+	}
 
+	// An image smaller than the overlay leaves the rest of dim black, not
+	// whatever the new pixmap's memory happened to hold.
+	xproto.PolyFillRectangle(conn, dim, gc, []xproto.Rectangle{{Width: uint16(width), Height: uint16(height)}})
+	maxReq := int(setup.MaximumRequestLength)
+	putImage(conn, bright, gc, img, width, height, maxReq)
+	putImage(conn, dim, gc, dimmed(img), width, height, maxReq)
+	xproto.ChangeGC(conn, gc, xproto.GcForeground, []uint32{screen.WhitePixel})
+
+	// Mapped only now, so the upload above never shows as a black screen.
+	xproto.MapWindow(conn, wid)
 	xproto.GrabPointer(conn, false, wid,
 		uint16(xproto.EventMaskButtonPress|xproto.EventMaskButtonRelease|xproto.EventMaskPointerMotion),
 		xproto.GrabModeAsync, xproto.GrabModeAsync, wid, xproto.CursorNone, xproto.TimeCurrentTime)
 
-	paint := func(sel *image.Rectangle) {
-		xproto.CopyArea(conn, xproto.Drawable(pix), xproto.Drawable(wid), gc,
-			0, 0, 0, 0, uint16(width), uint16(height))
-		if sel != nil {
-			xproto.PolyRectangle(conn, xproto.Drawable(wid), gc, []xproto.Rectangle{{
-				X: int16(sel.Min.X), Y: int16(sel.Min.Y),
-				Width: uint16(sel.Dx()), Height: uint16(sel.Dy()),
-			}})
+	pointer, err := xproto.QueryPointer(conn, wid).Reply()
+	if err != nil {
+		return image.Rectangle{}, false, err
+	}
+	cursor := pointOf(pointer.WinX, pointer.WinY)
+	var sel image.Rectangle
+
+	paint := func() {
+		xproto.CopyArea(conn, dim, back, gc, 0, 0, 0, 0, uint16(width), uint16(height))
+		if sel.Empty() {
+			if lines := guides(cursor, img.Rect); lines != nil {
+				xproto.PolySegment(conn, back, gc, lines)
+			}
+		} else {
+			x, y := int16(sel.Min.X), int16(sel.Min.Y)
+			xproto.CopyArea(conn, bright, back, gc, x, y, x, y, uint16(sel.Dx()), uint16(sel.Dy()))
+			xproto.PolyRectangle(conn, back, gc, []xproto.Rectangle{outline(sel)})
 		}
+		xproto.CopyArea(conn, back, xproto.Drawable(wid), gc, 0, 0, 0, 0, uint16(width), uint16(height))
 	}
 
 	drag := dragger{bounds: img.Rect}
@@ -86,7 +122,7 @@ func Select(img *image.RGBA) (image.Rectangle, bool, error) {
 		}
 		switch e := ev.(type) {
 		case xproto.ExposeEvent:
-			paint(nil)
+			paint()
 		case xproto.KeyPressEvent:
 			if e.Detail == escapeKeycode {
 				return image.Rectangle{}, false, nil
@@ -98,9 +134,9 @@ func Select(img *image.RGBA) (image.Rectangle, bool, error) {
 				drag.press(pointOf(e.EventX, e.EventY))
 			}
 		case xproto.MotionNotifyEvent:
-			if r, ok := drag.move(pointOf(e.EventX, e.EventY)); ok {
-				paint(&r)
-			}
+			cursor = pointOf(e.EventX, e.EventY)
+			sel, _ = drag.move(cursor)
+			paint()
 		case xproto.ButtonReleaseEvent:
 			// A release with no drag behind it -- the tail of the click that
 			// launched us, or a click that never moved -- is not a choice.
@@ -108,11 +144,52 @@ func Select(img *image.RGBA) (image.Rectangle, bool, error) {
 			if e.Detail != xproto.ButtonIndex1 {
 				continue
 			}
-			if r, ok := drag.release(pointOf(e.EventX, e.EventY)); ok {
+			cursor = pointOf(e.EventX, e.EventY)
+			if r, ok := drag.release(cursor); ok {
 				return r, true, nil
 			}
-			paint(nil)
+			sel = image.Rectangle{}
+			paint()
 		}
+	}
+}
+
+// dimmed returns a darkened copy of img, drawn everywhere outside the
+// selection. Core X has no alpha, so darkening happens here, once, rather
+// than per frame on the server.
+func dimmed(img *image.RGBA) *image.RGBA {
+	out := image.NewRGBA(img.Rect)
+	for i := 0; i+3 < len(img.Pix); i += 4 {
+		out.Pix[i] = dimChannel(img.Pix[i])
+		out.Pix[i+1] = dimChannel(img.Pix[i+1])
+		out.Pix[i+2] = dimChannel(img.Pix[i+2])
+		out.Pix[i+3] = img.Pix[i+3]
+	}
+	return out
+}
+
+func dimChannel(v uint8) uint8 {
+	return uint8(uint32(v) * 7 / 10)
+}
+
+// guides returns the crosshair through p, spanning the image. A pointer off
+// the image has no guides, since nothing can be selected there.
+func guides(p image.Point, bounds image.Rectangle) []xproto.Segment {
+	if !p.In(bounds) {
+		return nil
+	}
+	return []xproto.Segment{
+		{X1: int16(bounds.Min.X), Y1: int16(p.Y), X2: int16(bounds.Max.X - 1), Y2: int16(p.Y)},
+		{X1: int16(p.X), Y1: int16(bounds.Min.Y), X2: int16(p.X), Y2: int16(bounds.Max.Y - 1)},
+	}
+}
+
+// outline returns the rectangle to stroke around sel. X draws one pixel
+// wider and taller than asked, hence the minus one.
+func outline(sel image.Rectangle) xproto.Rectangle {
+	return xproto.Rectangle{
+		X: int16(sel.Min.X), Y: int16(sel.Min.Y),
+		Width: uint16(sel.Dx() - 1), Height: uint16(sel.Dy() - 1),
 	}
 }
 
