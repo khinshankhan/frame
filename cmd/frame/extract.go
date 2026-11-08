@@ -23,9 +23,9 @@ import (
 const (
 	tesseractBinary = "tesseract"
 
-	// Screen text is small for tesseract. 3x read test renders far better
-	// than the original size.
-	ocrUpscale = 3
+	// Screen text is small for tesseract. 2x read browser and terminal text
+	// far better than the original size, and 3x was no better.
+	ocrUpscale = 2
 )
 
 var errNoText = errors.New("no text found")
@@ -71,10 +71,10 @@ func recognize(binary, lang string, img image.Image) (string, error) {
 		return "", err
 	}
 
-	// psm 6 reads one block of text, which is what a dragged area usually is.
-	// psm 3 finds its own layout and read ls -l output column by column.
+	// psm 4 reads one column of text in mixed sizes. psm 3 read ls -l output
+	// column by column, and psm 6 lost words from forms and video calls.
 	var out, stderr bytes.Buffer
-	cmd := exec.Command(binary, "stdin", "stdout", "-l", lang, "--oem", "1", "--psm", "6")
+	cmd := exec.Command(binary, "stdin", "stdout", "-l", lang, "--oem", "1", "--psm", "4")
 	cmd.Stdin = &in
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr

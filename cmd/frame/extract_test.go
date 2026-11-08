@@ -34,7 +34,7 @@ func TestRecognizeOutput(t *testing.T) {
 	}{
 		{"strips the page break tesseract ends with", `printf 'hello\nworld\n\f'`, "hello\nworld", ""},
 		{"keeps the lines of a block", `printf 'a\n\nb\n'`, "a\n\nb", ""},
-		{"passes the flags and language", `printf '%s ' "$@"`, "stdin stdout -l deu --oem 1 --psm 6", ""},
+		{"passes the flags and language", `printf '%s ' "$@"`, "stdin stdout -l deu --oem 1 --psm 4", ""},
 		{"reports what tesseract said", `echo 'no such language' >&2; exit 1`, "", "no such language"},
 	}
 	for _, tt := range tests {
