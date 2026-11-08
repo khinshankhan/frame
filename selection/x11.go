@@ -109,11 +109,16 @@ func Select(img *image.RGBA) (image.Rectangle, bool, error) {
 			xproto.PolyRectangle(conn, back, gc, []xproto.Rectangle{outline(sel)})
 		}
 		xproto.CopyArea(conn, back, xproto.Drawable(wid), gc, 0, 0, 0, 0, uint16(width), uint16(height))
+		// Wait for the server to finish the frame, so motion that arrives
+		// meanwhile queues up here for events.next to skip. A failure here
+		// means the connection died, which the event loop reports.
+		xproto.GetInputFocus(conn).Reply()
 	}
 
 	drag := dragger{bounds: img.Rect}
+	queue := events{wait: conn.WaitForEvent, poll: conn.PollForEvent}
 	for {
-		ev, xerr := conn.WaitForEvent()
+		ev, xerr := queue.next()
 		if xerr != nil {
 			return image.Rectangle{}, false, xerr
 		}
@@ -151,6 +156,43 @@ func Select(img *image.RGBA) (image.Rectangle, bool, error) {
 			sel = image.Rectangle{}
 			paint()
 		}
+	}
+}
+
+// events reads X events, passing over any motion that a newer motion has
+// already replaced. Every motion repaints the screen, so without this a
+// large screen falls further behind the faster the mouse moves.
+type events struct {
+	wait, poll func() (xgb.Event, xgb.Error)
+	held       xgb.Event
+}
+
+func (q *events) next() (xgb.Event, xgb.Error) {
+	ev := q.held
+	q.held = nil
+	if ev == nil {
+		var err xgb.Error
+		ev, err = q.wait()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := ev.(xproto.MotionNotifyEvent); !ok {
+		return ev, nil
+	}
+	for {
+		newer, err := q.poll()
+		if err != nil {
+			return nil, err
+		}
+		if newer == nil {
+			return ev, nil
+		}
+		if _, ok := newer.(xproto.MotionNotifyEvent); !ok {
+			q.held = newer
+			return ev, nil
+		}
+		ev = newer
 	}
 }
 

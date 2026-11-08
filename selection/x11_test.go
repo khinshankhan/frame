@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/jezek/xgb"
 	"github.com/jezek/xgb/xproto"
 )
 
@@ -79,6 +80,62 @@ func TestOutlineStaysInsideSelection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := outline(tt.sel); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+type fakeEvent struct{ name string }
+
+func (e fakeEvent) Bytes() []byte  { return nil }
+func (e fakeEvent) String() string { return e.name }
+
+func motionAt(x int16) xproto.MotionNotifyEvent {
+	return xproto.MotionNotifyEvent{EventX: x}
+}
+
+func TestEventsSkipStaleMotion(t *testing.T) {
+	press := fakeEvent{"press"}
+	release := fakeEvent{"release"}
+	tests := []struct {
+		name   string
+		queued []xgb.Event
+		want   []xgb.Event
+	}{
+		{"a lone motion", []xgb.Event{motionAt(1)}, []xgb.Event{motionAt(1)}},
+		{"only the newest of a run", []xgb.Event{motionAt(1), motionAt(2), motionAt(3)}, []xgb.Event{motionAt(3)}},
+		{
+			"motion is not skipped past a button",
+			[]xgb.Event{motionAt(1), motionAt(2), press, motionAt(3), motionAt(4), release},
+			[]xgb.Event{motionAt(2), press, motionAt(4), release},
+		},
+		{"other events all arrive", []xgb.Event{press, release}, []xgb.Event{press, release}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			queue := tt.queued
+			poll := func() (xgb.Event, xgb.Error) {
+				if len(queue) == 0 {
+					return nil, nil
+				}
+				ev := queue[0]
+				queue = queue[1:]
+				return ev, nil
+			}
+			q := events{wait: poll, poll: poll}
+			var got []xgb.Event
+			for {
+				ev, err := q.next()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ev == nil {
+					break
+				}
+				got = append(got, ev)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("got %v, want %v", got, tt.want)
 			}
 		})
