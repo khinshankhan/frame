@@ -5,12 +5,19 @@ package selection
 import (
 	"fmt"
 	"image"
+	"time"
 
 	"github.com/jezek/xgb"
 	"github.com/jezek/xgb/xproto"
 )
 
-const escapeKeysym xproto.Keysym = 0xff1b
+const (
+	escapeKeysym xproto.Keysym = 0xff1b
+
+	// Together these wait up to a second for the keyboard to come free.
+	keyboardGrabTries = 100
+	keyboardGrabWait  = 10 * time.Millisecond
+)
 
 // Scale reports pixels of img per display point. X11 addresses the screen
 // in pixels already, so its rectangles need no conversion.
@@ -89,6 +96,9 @@ func Select(img *image.RGBA) (image.Rectangle, bool, error) {
 	xproto.GrabPointer(conn, false, wid,
 		uint16(xproto.EventMaskButtonPress|xproto.EventMaskButtonRelease|xproto.EventMaskPointerMotion),
 		xproto.GrabModeAsync, xproto.GrabModeAsync, wid, xproto.CursorNone, xproto.TimeCurrentTime)
+	if err := grabKeyboard(conn, wid); err != nil {
+		return image.Rectangle{}, false, err
+	}
 
 	pointer, err := xproto.QueryPointer(conn, wid).Reply()
 	if err != nil {
@@ -157,6 +167,26 @@ func Select(img *image.RGBA) (image.Rectangle, bool, error) {
 			paint()
 		}
 	}
+}
+
+// grabKeyboard takes the keyboard so Escape reaches the overlay: a window
+// manager never focuses an override-redirect window. Launched from a hotkey,
+// the keyboard stays held until that key comes up, so it gets a moment.
+func grabKeyboard(conn *xgb.Conn, wid xproto.Window) error {
+	var status byte
+	for range keyboardGrabTries {
+		reply, err := xproto.GrabKeyboard(conn, false, wid, xproto.TimeCurrentTime,
+			xproto.GrabModeAsync, xproto.GrabModeAsync).Reply()
+		if err != nil {
+			return err
+		}
+		if reply.Status == xproto.GrabStatusSuccess {
+			return nil
+		}
+		status = reply.Status
+		time.Sleep(keyboardGrabWait)
+	}
+	return fmt.Errorf("could not grab the keyboard, is another program holding it? (X status %d)", status)
 }
 
 // events reads X events, passing over any motion that a newer motion has
