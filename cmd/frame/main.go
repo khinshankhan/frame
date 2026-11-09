@@ -38,8 +38,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   frame capture [-d display] [out.png]   capture a display to a PNG ("-" for stdout)
   frame select [-points] [image.png]     pick an area, print "x y w h"
-  frame extract [-l lang] [image.png]    pick an area, print and copy its text
-                                         (experimental, needs tesseract)
+  frame extract [-l lang] [-engine name] [-v] [image.png]
+                                         pick an area, print and copy its text
+                                         (experimental, needs keming or
+                                         tesseract)
   frame displays                         list displays
   frame version                          show build info
 

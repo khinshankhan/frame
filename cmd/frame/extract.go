@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -32,13 +33,27 @@ var errNoText = errors.New("no text found")
 
 func runExtract(args []string) error {
 	fs := flag.NewFlagSet("extract", flag.ExitOnError)
-	lang := fs.String("l", "eng", "tesseract language, see tesseract --list-langs")
+	lang := fs.String("l", "", "language of the text when it reads wrong: an ISO 639-1 code such as fr with keming, or tesseract's name such as fra without it; English by default")
+	engine := fs.String("engine", "auto", "keming's reader, see keming -h; needs keming")
+	verbose := fs.Bool("v", false, "say on stderr which reader's text was used")
 	fs.Parse(args)
 
 	// Checked first: finding out after picking an area wastes the pick.
-	binary, err := exec.LookPath(tesseractBinary)
-	if err != nil {
-		return fmt.Errorf("extract needs tesseract installed: %w", err)
+	var keming *kemingRun
+	var tesseract string
+	if binary, err := exec.LookPath(kemingBinary); err == nil {
+		// Started now, so it loads while the area is picked.
+		if keming, err = startKeming(binary, kemingArgs(*lang, *engine, *verbose), os.Stderr); err != nil {
+			return err
+		}
+		defer keming.cancel()
+	} else {
+		if *engine != "auto" {
+			return fmt.Errorf("-engine needs keming installed: %w", err)
+		}
+		if tesseract, err = exec.LookPath(tesseractBinary); err != nil {
+			return fmt.Errorf("extract needs keming or tesseract installed: %w", err)
+		}
 	}
 
 	img, err := inputImage(fs)
@@ -53,7 +68,19 @@ func runExtract(args []string) error {
 		return nil // cancelled; declining to select is not an error
 	}
 
-	text, err := recognize(binary, *lang, upscale(img.SubImage(r), ocrUpscale))
+	var text string
+	if keming != nil {
+		text, err = keming.read(img.SubImage(r))
+	} else {
+		if *verbose {
+			fmt.Fprintln(os.Stderr, "frame: read by tesseract (keming not installed)")
+		}
+		tl := *lang
+		if tl == "" {
+			tl = "eng"
+		}
+		text, err = recognize(tesseract, tl, upscale(img.SubImage(r), ocrUpscale))
+	}
 	if err != nil {
 		return err
 	}
